@@ -1,0 +1,27 @@
+name: "openHASP Designer"
+version: "1.0.0"
+slug: "openhasp-designer"
+description: "Visual designer for openHASP with Home Assistant integration"
+url: "https://github.com/ketronkowski/openhasp-designer-ha"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+init: false
+ingress: true
+ingress_port: 5173
+panel_icon: mdi:palette
+panel_title: "openHASP Designer"
+startup: application
+boot: auto
+ports:
+  8080/tcp: 8080
+ports_description:
+  8080/tcp: "Backend API port"
+options:
+  ha_url: "http://supervisor/core"
+  ha_token: ""
+schema:
+  ha_url: str
+  ha_token: password
+image: "ghcr.io/ketronkowski/{arch}-openhasp-designer"

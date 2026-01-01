@@ -1,0 +1,45 @@
+{
+    "name": "openHASP Designer Development",
+    "image": "ghcr.io/home-assistant/devcontainer:latest",
+    "appPort": [
+        "5173:5173",
+        "8080:8080",
+        "8123:8123"
+    ],
+    "postCreateCommand": "bash .devcontainer/devcontainer_bootstrap",
+    "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "Vue.volar",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+    ],
+    "settings": {
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        "python.formatting.provider": "black",
+        "editor.formatOnSave": true,
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false
+    },
+    "forwardPorts": [
+        5173,
+        8080,
+        8123
+    ],
+    "portsAttributes": {
+        "5173": {
+            "label": "Frontend",
+            "onAutoForward": "notify"
+        },
+        "8080": {
+            "label": "Backend API",
+            "onAutoForward": "notify"
+        },
+        "8123": {
+            "label": "Home Assistant",
+            "onAutoForward": "notify"
+        }
+    },
+    "remoteUser": "root"
+}

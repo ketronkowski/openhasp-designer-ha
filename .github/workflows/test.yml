@@ -1,0 +1,73 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11']
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend-python/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          cd backend-python
+          pip install -r requirements.txt
+          pip install -r requirements-test.txt
+      
+      - name: Run tests with coverage
+        run: |
+          cd backend-python
+          python -m pytest --cov=app --cov-report=xml --cov-report=term-missing
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./backend-python/coverage.xml
+          flags: backend
+          name: backend-coverage
+
+  lint-backend:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install linting tools
+        run: |
+          pip install black flake8 mypy
+      
+      - name: Check formatting with black
+        run: |
+          cd backend-python
+          black --check app/ tests/
+      
+      - name: Lint with flake8
+        run: |
+          cd backend-python
+          flake8 app/ tests/ --max-line-length=100 --extend-ignore=E203,W503

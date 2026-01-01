@@ -1,0 +1,67 @@
+#!/bin/bash
+set -e
+
+echo "=========================================="
+echo "openHASP Designer Development Setup"
+echo "=========================================="
+
+# Get workspace directory
+WORKSPACE_DIR="/workspaces/openhasp-designer-ha"
+
+# Install backend dependencies
+echo ""
+echo "📦 Installing Python dependencies..."
+cd "${WORKSPACE_DIR}/backend-python"
+pip3 install -r requirements.txt
+pip3 install pytest pytest-cov pytest-asyncio black pylint
+
+# Install frontend dependencies
+echo ""
+echo "📦 Installing Node.js dependencies..."
+cd "${WORKSPACE_DIR}/frontend"
+npm install
+
+# Set up Home Assistant config
+echo ""
+echo "🏠 Setting up Home Assistant..."
+cd "${WORKSPACE_DIR}"
+mkdir -p config/openhasp
+
+# Create basic HA configuration
+cat > config/configuration.yaml <<EOF
+default_config:
+
+http:
+  cors_allowed_origins:
+    - http://localhost:5173
+    - http://localhost:8080
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
+
+logger:
+  default: info
+  logs:
+    homeassistant.core: debug
+EOF
+
+# Create openHASP test config
+cat > config/openhasp/pages.jsonl <<EOF
+{"page":0,"id":0,"obj":"page"}
+{"page":0,"id":1,"obj":"btn","x":10,"y":10,"w":100,"h":50,"text":"Test Button"}
+EOF
+
+echo ""
+echo "✅ Development environment ready!"
+echo ""
+echo "To start development:"
+echo "  1. Frontend: cd frontend && npm run dev"
+echo "  2. Backend:  cd backend-python && uvicorn app.main:app --reload --host 0.0.0.0"
+echo "  3. Tests:    cd backend-python && pytest"
+echo ""
+echo "Access points:"
+echo "  - Frontend: http://localhost:5173"
+echo "  - Backend:  http://localhost:8080"
+echo "  - HA:       http://localhost:8123"
+echo ""
