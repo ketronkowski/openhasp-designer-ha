@@ -19,6 +19,8 @@ class DeviceService:
         """
         Discover all openHASP devices from Home Assistant.
         
+        Uses entity-based discovery which is more reliable than device registry.
+        
         Returns list of devices with:
         - device_id
         - name
@@ -28,78 +30,111 @@ class DeviceService:
         """
         try:
             async with httpx.AsyncClient() as client:
-                # Get all devices from HA
+                # Get all entities from HA
                 response = await client.get(
-                    f"{self.base_url}/api/config/device_registry/list",
+                    f"{self.base_url}/api/states",
                     headers=self.headers,
                     timeout=10.0
                 )
                 response.raise_for_status()
-                all_devices = response.json()
+                all_entities = response.json()
                 
-                # Filter for openHASP devices
-                openhasp_devices = []
-                for device in all_devices:
-                    # Check if device is openHASP (via integration)
-                    if self._is_openhasp_device(device):
-                        device_info = await self._enrich_device_info(device)
-                        openhasp_devices.append(device_info)
+                # Find openHASP devices by looking for openhasp entities
+                devices_map = {}
                 
-                return openhasp_devices
+                for entity in all_entities:
+                    entity_id = entity.get("entity_id", "")
+                    
+                    # Look for openhasp entities (e.g., "sensor.plate01_status")
+                    if not entity_id.startswith(("sensor.", "switch.", "light.", "binary_sensor.")):
+                        continue
+                    
+                    # Check if it's an openHASP entity
+                    attributes = entity.get("attributes", {})
+                    integration = attributes.get("integration", "")
+                    
+                    # Multiple ways to detect openHASP
+                    is_openhasp = (
+                        "openhasp" in entity_id.lower() or
+                        "plate" in entity_id.lower() or
+                        integration == "openhasp" or
+                        "openhasp" in str(attributes.get("device_class", "")).lower()
+                    )
+                    
+                    if is_openhasp:
+                        # Extract device name from entity_id (e.g., "plate01" from "sensor.plate01_status")
+                        parts = entity_id.split(".")
+                        if len(parts) >= 2:
+                            # Get the part before the first underscore
+                            device_name = parts[1].split("_")[0]
+                            
+                            if device_name not in devices_map:
+                                devices_map[device_name] = {
+                                    "device_id": device_name,
+                                    "name": attributes.get("friendly_name", device_name).replace(" Status", "").replace(" status", ""),
+                                    "model": attributes.get("model", "Unknown"),
+                                    "manufacturer": "openHASP",
+                                    "online": True,
+                                    "resolution": None,
+                                    "entities": []
+                                }
+                            
+                            # Track entities for this device
+                            devices_map[device_name]["entities"].append(entity_id)
+                            
+                            # Check online status from status entity
+                            if "status" in entity_id.lower():
+                                state = entity.get("state", "").lower()
+                                devices_map[device_name]["online"] = state in ["on", "online", "connected", "available"]
+                            
+                            # Try to get model info
+                            if attributes.get("model"):
+                                devices_map[device_name]["model"] = attributes["model"]
+                
+                # Convert to list and enrich with resolution info
+                devices = []
+                for device_id, device_info in devices_map.items():
+                    # Try to determine resolution from model
+                    model = device_info["model"].lower()
+                    resolution = self._get_resolution_from_model(model)
+                    if resolution:
+                        device_info["resolution"] = resolution
+                    
+                    devices.append(device_info)
+                
+                logger.info(f"Discovered {len(devices)} openHASP devices")
+                return devices
                 
         except httpx.HTTPError as e:
-            logger.error(f"Failed to fetch devices from HA: {e}")
+            logger.error(f"Failed to fetch entities from HA: {e}")
             return []
         except Exception as e:
             logger.error(f"Unexpected error fetching devices: {e}")
             return []
     
-    def _is_openhasp_device(self, device: Dict[str, Any]) -> bool:
-        """Check if device is an openHASP device."""
-        # Check for openHASP integration
-        config_entries = device.get("config_entries", [])
-        identifiers = device.get("identifiers", [])
+    def _get_resolution_from_model(self, model: str) -> Optional[Dict[str, int]]:
+        """Get resolution from model string."""
+        model_clean = model.replace("-", "").replace("_", "").lower()
         
-        # Look for openhasp in config entries or identifiers
-        for entry in config_entries:
-            if "openhasp" in str(entry).lower():
-                return True
+        # Map common model names to resolution keys
+        model_mappings = {
+            "lanbon": "lanbon_l8",
+            "l8": "lanbon_l8",
+            "wt32sc01": "wt32_sc01",
+            "wt32": "wt32_sc01",
+            "esp322432s028r": "esp32_2432s028r",
+            "esp323248s035c": "esp32_3248s035c",
+            "m5stackcore2": "m5stack_core2",
+            "lilygo": "lilygo_t_display"
+        }
         
-        for identifier in identifiers:
-            if isinstance(identifier, (list, tuple)) and len(identifier) > 0:
-                if "openhasp" in str(identifier[0]).lower():
-                    return True
-        
-        return False
-    
-    async def _enrich_device_info(self, device: Dict[str, Any]) -> Dict[str, Any]:
-        """Enrich device info with resolution and online status."""
-        device_id = device.get("id")
-        name = device.get("name_by_user") or device.get("name", "Unknown")
-        model = device.get("model", "").lower()
-        manufacturer = device.get("manufacturer", "")
-        
-        # Try to get resolution from model
-        resolution = None
-        for model_key in ["lanbon_l8", "wt32_sc01", "esp32_2432s028r", "esp32_3248s035c"]:
-            if model_key.replace("_", "") in model.replace("-", "").replace("_", ""):
+        for pattern, model_key in model_mappings.items():
+            if pattern in model_clean:
                 res = get_device_resolution(model_key)
                 if res:
-                    resolution = {"width": res.width, "height": res.height}
-                    break
+                    return {"width": res.width, "height": res.height}
         
-        # Get online status from entities
-        online = await self._check_device_online(device_id)
-        
-        return {
-            "device_id": device_id,
-            "name": name,
-            "model": model or "Unknown",
-            "manufacturer": manufacturer,
-            "resolution": resolution,
-            "online": online,
-            "identifiers": device.get("identifiers", [])
-        }
+        return None
     
     async def _check_device_online(self, device_id: str) -> bool:
         """Check if device is online by checking its entities."""
