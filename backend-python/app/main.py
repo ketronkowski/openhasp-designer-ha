@@ -488,10 +488,9 @@ async def import_config_enhanced(request: ImportRequest):
 @app.get("/api/config/import/device/{device_id}")
 async def import_config_from_device(device_id: str):
     """
-    Import JSONL configuration directly from a device.
+    Import configuration directly from a device.
     
-    Automatically finds the JSONL file for the specified device
-    and returns parsed configuration.
+    Fetches the JSONL file from Home Assistant server using file.read_file service.
     
     Args:
         device_id: Device ID to import from
@@ -500,24 +499,91 @@ async def import_config_from_device(device_id: str):
         Parsed configuration objects
     """
     try:
-        # Try common filename patterns
-        possible_filenames = [
+        # Try to fetch JSONL file from HA server using file service
+        # Common paths on HA server (relative to /config/)
+        possible_paths = [
+            f"openhasp_jsonl/{device_id}.jsonl",
+            f"openhasp/{device_id}.jsonl",
             f"{device_id}.jsonl",
-            f"pages_{device_id}.jsonl",
-            "pages.jsonl"  # fallback
         ]
         
-        layout = None
-        for filename in possible_filenames:
-            layout = import_service.import_from_ha_config(filename)
-            if layout:
-                logger.info(f"Found config for {device_id} in {filename}")
-                break
+        import httpx
+        jsonl_content = None
+        found_path = None
+        
+        # Try to fetch from HA server using file.read_file service
+        async with httpx.AsyncClient() as client:
+            for path in possible_paths:
+                try:
+                    # Call HA service to read file
+                    # Note: Requires ?return_response to get the file content back
+                    # Note: Uses 'file_name' parameter, paths are relative to /config/
+                    response = await client.post(
+                        f"{config.ha_url}/api/services/file/read_file?return_response",
+                        headers={
+                            "Authorization": f"Bearer {config.ha_token}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "file_name": path  # Changed from 'path' to 'file_name'
+                        },
+                        timeout=10.0
+                    )
+                    
+                    if response.status_code == 200:
+                        # The response is the file content directly
+                        jsonl_content = response.text
+                        found_path = f"/config/{path}"
+                        logger.info(f"Found config for {device_id} at {found_path}")
+                        break
+                except Exception as e:
+                    logger.debug(f"Could not fetch {path}: {e}")
+                    continue
+        
+        # If not found via HA service, try local file system as fallback
+        if not jsonl_content:
+            logger.debug("Trying local file system as fallback")
+            possible_local = [
+                f"{device_id}.jsonl",
+                f"pages_{device_id}.jsonl",
+                "pages.jsonl"
+            ]
+            
+            for filename in possible_local:
+                layout = import_service.import_from_ha_config(filename)
+                if layout:
+                    logger.info(f"Found local config for {device_id} in {filename}")
+                    # Convert to objects format
+                    objects = []
+                    for page in layout.pages:
+                        for obj in page.objects:
+                            objects.append(obj.dict())
+                    
+                    return {
+                        "success": True,
+                        "device_id": device_id,
+                        "source_file": filename,
+                        "source_type": "local_jsonl",
+                        "objects": objects,
+                        "metadata": {
+                            "project_name": layout.name or device_id,
+                            "page_size": "medium_portrait"
+                        }
+                    }
+        
+        if not jsonl_content:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No configuration found for device {device_id}. Tried paths: {', '.join(possible_paths)}"
+            )
+        
+        # Parse the JSONL content
+        layout = import_service.import_from_content(jsonl_content)
         
         if not layout:
             raise HTTPException(
-                status_code=404,
-                detail=f"No configuration found for device {device_id}"
+                status_code=400,
+                detail=f"Failed to parse configuration from {found_path}"
             )
         
         # Convert to objects format
@@ -529,10 +595,12 @@ async def import_config_from_device(device_id: str):
         return {
             "success": True,
             "device_id": device_id,
+            "source_file": found_path,
+            "source_type": "ha_server_jsonl",
             "objects": objects,
             "metadata": {
                 "project_name": layout.name or device_id,
-                "page_size": "medium_portrait"  # default
+                "page_size": "medium_portrait"
             }
         }
     except HTTPException:
