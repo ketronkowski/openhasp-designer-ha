@@ -57,50 +57,82 @@ class DeviceService:
                     is_openhasp = (
                         "openhasp" in entity_id.lower() or
                         "plate" in entity_id.lower() or
-                        integration == "openhasp" or
-                        "openhasp" in str(attributes.get("device_class", "")).lower()
+                        integration == "openhasp"
                     )
                     
+                    # Skip the integration itself (e.g., "switch.openhasp_pre_release")
+                    if "pre_release" in entity_id.lower() or "prerelease" in entity_id.lower():
+                        continue
+                    
                     if is_openhasp:
-                        # Extract device name from entity_id (e.g., "plate01" from "sensor.plate01_status")
+                        # Extract device name from entity_id (e.g., "kevin_plate" from "light.plate_kevin_backlight")
                         parts = entity_id.split(".")
                         if len(parts) >= 2:
-                            # Get the part before the first underscore
-                            device_name = parts[1].split("_")[0]
+                            # Get the part before common suffixes
+                            entity_base = parts[1]
                             
-                            if device_name not in devices_map:
-                                devices_map[device_name] = {
-                                    "device_id": device_name,
-                                    "name": attributes.get("friendly_name", device_name).replace(" Status", "").replace(" status", ""),
+                            # Try to extract device name by removing common suffixes
+                            for suffix in ["_backlight", "_antiburn", "_moodlight", "_status", "_light"]:
+                                if suffix in entity_base:
+                                    entity_base = entity_base.replace(suffix, "")
+                                    break
+                            
+                            # Remove trailing numbers (e.g., "_12", "_14")
+                            import re
+                            entity_base = re.sub(r'_\d+$', '', entity_base)
+                            
+                            # Use this as device_id
+                            device_id = entity_base
+                            
+                            if device_id not in devices_map:
+                                # Get friendly name from attributes
+                                friendly_name = attributes.get("friendly_name", "")
+                                
+                                # Extract device name from friendly name (e.g., "Kevin's Office Plate" from "Kevin's Office Plate Backlight")
+                                device_name = friendly_name
+                                for suffix in [" Backlight", " Antiburn", " Moodlight", " Status", " Light"]:
+                                    if device_name.endswith(suffix):
+                                        device_name = device_name[:-len(suffix)]
+                                        break
+                                
+                                # Remove trailing numbers from friendly name too
+                                device_name = re.sub(r'\s+\d+$', '', device_name)
+                                
+                                devices_map[device_id] = {
+                                    "device_id": device_id,
+                                    "name": device_name or device_id.replace("_", " ").title(),
                                     "model": attributes.get("model", "Unknown"),
                                     "manufacturer": "openHASP",
                                     "online": True,
                                     "resolution": None,
-                                    "entities": []
+                                    "entities": [],
+                                    "entity_id": device_id  # Store the base entity_id
                                 }
                             
                             # Track entities for this device
-                            devices_map[device_name]["entities"].append(entity_id)
+                            devices_map[device_id]["entities"].append(entity_id)
                             
                             # Check online status from status entity
                             if "status" in entity_id.lower():
                                 state = entity.get("state", "").lower()
-                                devices_map[device_name]["online"] = state in ["on", "online", "connected", "available"]
+                                devices_map[device_id]["online"] = state in ["on", "online", "connected", "available"]
                             
                             # Try to get model info
                             if attributes.get("model"):
-                                devices_map[device_name]["model"] = attributes["model"]
+                                devices_map[device_id]["model"] = attributes["model"]
                 
                 # Convert to list and enrich with resolution info
                 devices = []
                 for device_id, device_info in devices_map.items():
-                    # Try to determine resolution from model
-                    model = device_info["model"].lower()
-                    resolution = self._get_resolution_from_model(model)
-                    if resolution:
-                        device_info["resolution"] = resolution
-                    
-                    devices.append(device_info)
+                    # Only include devices with multiple entities (real devices, not integration)
+                    if len(device_info["entities"]) > 1:
+                        # Try to determine resolution from model
+                        model = device_info["model"].lower()
+                        resolution = self._get_resolution_from_model(model)
+                        if resolution:
+                            device_info["resolution"] = resolution
+                        
+                        devices.append(device_info)
                 
                 logger.info(f"Discovered {len(devices)} openHASP devices")
                 return devices
