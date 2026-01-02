@@ -45,8 +45,31 @@ class DeviceService:
                 for entity in all_entities:
                     entity_id = entity.get("entity_id", "")
                     
+                    # Special handling for openhasp.{device_id} entities (main device entity)
+                    if entity_id.startswith("openhasp."):
+                        device_name = entity_id.split(".")[1]
+                        if device_name not in devices_map:
+                            attributes = entity.get("attributes", {})
+                            devices_map[device_name] = {
+                                "device_id": device_name,
+                                "name": "",  # Will be set later
+                                "model": attributes.get("tftDriver", "Unknown"),
+                                "manufacturer": "openHASP",
+                                "online": True,
+                                "resolution": {
+                                    "width": attributes.get("tftWidth"),
+                                    "height": attributes.get("tftHeight")
+                                } if attributes.get("tftWidth") and attributes.get("tftHeight") else None,
+                                "entities": [entity_id],
+                                "entity_id": device_name,
+                                "friendly_names": [],
+                                "ip": attributes.get("ip"),
+                                "version": attributes.get("version")
+                            }
+                        continue
+                    
                     # Look for openhasp entities (e.g., "sensor.plate01_status")
-                    if not entity_id.startswith(("sensor.", "switch.", "light.", "binary_sensor.")):
+                    if not entity_id.startswith(("sensor.", "switch.", "light.", "binary_sensor.", "button.", "number.")):
                         continue
                     
                     # Check if it's an openHASP entity
@@ -72,7 +95,7 @@ class DeviceService:
                             entity_base = parts[1]
                             
                             # Try to extract device name by removing common suffixes
-                            for suffix in ["_backlight", "_antiburn", "_moodlight", "_status", "_light"]:
+                            for suffix in ["_backlight", "_antiburn", "_moodlight", "_status", "_light", "_restart", "_page_number"]:
                                 if suffix in entity_base:
                                     entity_base = entity_base.replace(suffix, "")
                                     break
@@ -119,18 +142,25 @@ class DeviceService:
                 for device_id, device_info in devices_map.items():
                     # Only include devices with multiple entities (real devices, not integration)
                     if len(device_info["entities"]) > 1:
-                        # Extract device name from friendly names
-                        device_name = self._extract_device_name(device_info["friendly_names"])
+                        # Try multiple strategies to get device name
+                        device_name = await self._get_device_name_from_registry(device_info["entities"][0])
+                        
+                        if not device_name:
+                            # Fallback to extracting from friendly names
+                            device_name = self._extract_device_name(device_info["friendly_names"])
+                        
                         device_info["name"] = device_name or device_id.replace("_", " ").title()
                         
                         # Remove temporary friendly_names list
-                        del device_info["friendly_names"]
+                        if "friendly_names" in device_info:
+                            del device_info["friendly_names"]
                         
-                        # Try to determine resolution from model
-                        model = device_info["model"].lower()
-                        resolution = self._get_resolution_from_model(model)
-                        if resolution:
-                            device_info["resolution"] = resolution
+                        # Try to determine resolution from model if not already set
+                        if not device_info.get("resolution"):
+                            model = device_info["model"].lower()
+                            resolution = self._get_resolution_from_model(model)
+                            if resolution:
+                                device_info["resolution"] = resolution
                         
                         devices.append(device_info)
                 
@@ -143,6 +173,60 @@ class DeviceService:
         except Exception as e:
             logger.error(f"Unexpected error fetching devices: {e}")
             return []
+    
+    async def _get_device_name_from_registry(self, entity_id: str) -> Optional[str]:
+        """
+        Get device name from device registry using an entity ID.
+        
+        This fetches the actual device name set in HA (e.g., "Kevin's Office Plate").
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                # Get entity registry to find device_id
+                response = await client.get(
+                    f"{self.base_url}/api/config/entity_registry/list",
+                    headers=self.headers,
+                    timeout=5.0
+                )
+                
+                if response.status_code != 200:
+                    return None
+                
+                entities = response.json()
+                
+                # Find our entity and get its device_id
+                ha_device_id = None
+                for entity in entities:
+                    if entity.get("entity_id") == entity_id:
+                        ha_device_id = entity.get("device_id")
+                        break
+                
+                if not ha_device_id:
+                    return None
+                
+                # Now get device info from device registry
+                response = await client.get(
+                    f"{self.base_url}/api/config/device_registry/list",
+                    headers=self.headers,
+                    timeout=5.0
+                )
+                
+                if response.status_code != 200:
+                    return None
+                
+                devices = response.json()
+                
+                # Find our device and get its name
+                for device in devices:
+                    if device.get("id") == ha_device_id:
+                        # Prefer name_by_user, fallback to name
+                        return device.get("name_by_user") or device.get("name")
+                
+                return None
+                
+        except Exception as e:
+            logger.debug(f"Could not fetch device name from registry: {e}")
+            return None
     
     def _extract_device_name(self, friendly_names: List[str]) -> str:
         """
