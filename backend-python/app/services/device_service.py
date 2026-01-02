@@ -85,32 +85,25 @@ class DeviceService:
                             device_id = entity_base
                             
                             if device_id not in devices_map:
-                                # Get friendly name from attributes
-                                friendly_name = attributes.get("friendly_name", "")
-                                
-                                # Extract device name from friendly name (e.g., "Kevin's Office Plate" from "Kevin's Office Plate Backlight")
-                                device_name = friendly_name
-                                for suffix in [" Backlight", " Antiburn", " Moodlight", " Status", " Light"]:
-                                    if device_name.endswith(suffix):
-                                        device_name = device_name[:-len(suffix)]
-                                        break
-                                
-                                # Remove trailing numbers from friendly name too
-                                device_name = re.sub(r'\s+\d+$', '', device_name)
-                                
                                 devices_map[device_id] = {
                                     "device_id": device_id,
-                                    "name": device_name or device_id.replace("_", " ").title(),
+                                    "name": "",  # Will be set after collecting all entities
                                     "model": attributes.get("model", "Unknown"),
                                     "manufacturer": "openHASP",
                                     "online": True,
                                     "resolution": None,
                                     "entities": [],
-                                    "entity_id": device_id  # Store the base entity_id
+                                    "entity_id": device_id,
+                                    "friendly_names": []  # Collect all friendly names
                                 }
                             
                             # Track entities for this device
                             devices_map[device_id]["entities"].append(entity_id)
+                            
+                            # Collect friendly names
+                            friendly_name = attributes.get("friendly_name", "")
+                            if friendly_name:
+                                devices_map[device_id]["friendly_names"].append(friendly_name)
                             
                             # Check online status from status entity
                             if "status" in entity_id.lower():
@@ -126,6 +119,13 @@ class DeviceService:
                 for device_id, device_info in devices_map.items():
                     # Only include devices with multiple entities (real devices, not integration)
                     if len(device_info["entities"]) > 1:
+                        # Extract device name from friendly names
+                        device_name = self._extract_device_name(device_info["friendly_names"])
+                        device_info["name"] = device_name or device_id.replace("_", " ").title()
+                        
+                        # Remove temporary friendly_names list
+                        del device_info["friendly_names"]
+                        
                         # Try to determine resolution from model
                         model = device_info["model"].lower()
                         resolution = self._get_resolution_from_model(model)
@@ -143,6 +143,50 @@ class DeviceService:
         except Exception as e:
             logger.error(f"Unexpected error fetching devices: {e}")
             return []
+    
+    def _extract_device_name(self, friendly_names: List[str]) -> str:
+        """
+        Extract device name from list of entity friendly names.
+        
+        Finds common prefix among all friendly names, which typically
+        represents the device name (e.g., "Kevin's Office Plate" from
+        ["Kevin's Office Plate Backlight", "Kevin's Office Plate Moodlight"]).
+        """
+        if not friendly_names:
+            return ""
+        
+        if len(friendly_names) == 1:
+            # Single entity, remove common suffixes
+            name = friendly_names[0]
+            for suffix in [" Backlight", " Antiburn", " Moodlight", " Status", " Light"]:
+                if name.endswith(suffix):
+                    name = name[:-len(suffix)]
+                    break
+            return name.strip()
+        
+        # Find common prefix among all friendly names
+        # Sort to make comparison easier
+        sorted_names = sorted(friendly_names)
+        first = sorted_names[0]
+        last = sorted_names[-1]
+        
+        # Find common prefix
+        common_prefix = ""
+        for i in range(min(len(first), len(last))):
+            if first[i] == last[i]:
+                common_prefix += first[i]
+            else:
+                break
+        
+        # Clean up the prefix (remove trailing spaces and common suffixes)
+        common_prefix = common_prefix.strip()
+        
+        # Remove common trailing words that aren't part of device name
+        for suffix in [" Backlight", " Antiburn", " Moodlight", " Status", " Light"]:
+            if common_prefix.endswith(suffix):
+                common_prefix = common_prefix[:-len(suffix)]
+        
+        return common_prefix.strip()
     
     def _get_resolution_from_model(self, model: str) -> Optional[Dict[str, int]]:
         """Get resolution from model string."""
