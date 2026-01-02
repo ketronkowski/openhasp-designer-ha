@@ -142,6 +142,18 @@ class DeviceService:
                 for device_id, device_info in devices_map.items():
                     # Only include devices with multiple entities (real devices, not integration)
                     if len(device_info["entities"]) > 1:
+                        # Additional validation: must have openhasp.{device_id} entity or be clearly openHASP
+                        has_openhasp_entity = any(e.startswith("openhasp.") for e in device_info["entities"])
+                        has_openhasp_specific = any(
+                            "_backlight" in e or "_antiburn" in e or "_moodlight" in e 
+                            for e in device_info["entities"]
+                        )
+                        
+                        # Skip if it doesn't look like a real openHASP device
+                        if not (has_openhasp_entity or has_openhasp_specific):
+                            logger.debug(f"Skipping device {device_id} - not an openHASP device")
+                            continue
+                        
                         # Try multiple strategies to get device name
                         device_name = await self._get_device_name_from_registry(device_info["entities"][0])
                         
