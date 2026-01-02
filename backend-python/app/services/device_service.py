@@ -183,49 +183,63 @@ class DeviceService:
         try:
             async with httpx.AsyncClient() as client:
                 # Get entity registry to find device_id
+                logger.debug(f"Fetching entity registry for {entity_id}")
                 response = await client.get(
                     f"{self.base_url}/api/config/entity_registry/list",
                     headers=self.headers,
                     timeout=5.0
                 )
                 
+                logger.debug(f"Entity registry response status: {response.status_code}")
+                
                 if response.status_code != 200:
+                    logger.warning(f"Entity registry API returned {response.status_code}: {response.text[:200]}")
                     return None
                 
                 entities = response.json()
+                logger.debug(f"Found {len(entities)} entities in registry")
                 
                 # Find our entity and get its device_id
                 ha_device_id = None
                 for entity in entities:
                     if entity.get("entity_id") == entity_id:
                         ha_device_id = entity.get("device_id")
+                        logger.debug(f"Found device_id for {entity_id}: {ha_device_id}")
                         break
                 
                 if not ha_device_id:
+                    logger.debug(f"No device_id found for entity {entity_id}")
                     return None
                 
                 # Now get device info from device registry
+                logger.debug(f"Fetching device registry for device_id: {ha_device_id}")
                 response = await client.get(
                     f"{self.base_url}/api/config/device_registry/list",
                     headers=self.headers,
                     timeout=5.0
                 )
                 
+                logger.debug(f"Device registry response status: {response.status_code}")
+                
                 if response.status_code != 200:
+                    logger.warning(f"Device registry API returned {response.status_code}: {response.text[:200]}")
                     return None
                 
                 devices = response.json()
+                logger.debug(f"Found {len(devices)} devices in registry")
                 
                 # Find our device and get its name
                 for device in devices:
                     if device.get("id") == ha_device_id:
-                        # Prefer name_by_user, fallback to name
-                        return device.get("name_by_user") or device.get("name")
+                        device_name = device.get("name_by_user") or device.get("name")
+                        logger.info(f"Found device name from registry: {device_name}")
+                        return device_name
                 
+                logger.debug(f"Device {ha_device_id} not found in device registry")
                 return None
                 
         except Exception as e:
-            logger.debug(f"Could not fetch device name from registry: {e}")
+            logger.warning(f"Could not fetch device name from registry: {e}")
             return None
     
     def _extract_device_name(self, friendly_names: List[str]) -> str:
